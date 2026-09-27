@@ -50,12 +50,14 @@
 ### 1. Подготовка
 Репозиторий настроен на аккаунт GitHub `grishaSuperBoy`.
 
-В Render нажми: **New + &rarr; Web Service &rarr; Connect Repository**.
+В Render нажми: **New + &rarr; Blueprint** (или **Web Service**) и выбери репозиторий.
+Render автоматически подхватит файл `render.yaml` со всеми настройками!
 
-### 2. Настройки сборки
-* **Environment**: `Python 3`
-* **Build Command**: `pip install poetry && poetry install --only main`
-* **Start Command**: `poetry run python main.py`
+### 2. Настройки (автоматически из render.yaml)
+* **Region**: `Frankfurt (EU Central)` *(критично для прямого доступа к API Binance, Bybit, OKX без геоблокировок США)*
+* **Environment**: `Python 3` (3.11.9)
+* **Build Command**: `pip install -r requirements.txt`
+* **Start Command**: `python main.py`
 * **Plan**: `Free`
 * **Health Check Path**: `/health`
 

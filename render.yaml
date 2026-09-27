@@ -2,21 +2,38 @@ services:
   - type: web
     name: obi-lead-lag-collector
     runtime: python
-    buildCommand: "pip install poetry && poetry install --only main"
-    startCommand: "poetry run python main.py"
+    region: frankfurt
     plan: free
     autoDeploy: true
     healthCheckPath: /health
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
       - key: MONGO_DB_URL
-        sync: false # Set securely in Render dashboard
+        sync: false # Set securely in Render dashboard (mongodb+srv://...)
+      - key: MONGO_DB_NAME
+        value: obi_lead_lag
       - key: ENVIRONMENT
         value: production
+      - key: LOG_LEVEL
+        value: INFO
       - key: FLUSH_INTERVAL_SEC
         value: "600"
-      - key: MIN_LEAD_LAG_BPS
-        value: "15.0"
+      - key: LEAD_EXCHANGE
+        value: binance
+      - key: LAG_EXCHANGES
+        value: "asterdex,hyperliquid,dydx,bybit,okx,bitget,mexc,gateio,bingx"
       - key: OBI_THRESHOLD
         value: "0.50"
+      - key: MIN_LEAD_LAG_BPS
+        value: "15.0"
+      - key: TP_BPS
+        value: "25.0"
+      - key: SL_BPS
+        value: "18.0"
+      - key: ORDER_TIMEOUT_SEC
+        value: "15.0"
+      - key: MAX_HOLD_SEC
+        value: "45.0"
