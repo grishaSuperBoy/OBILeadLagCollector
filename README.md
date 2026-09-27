@@ -105,6 +105,8 @@ poetry run python main.py
 * **`GET /api/rankings`** — **Рейтинг бирж по отставанию** (где маркет-мейкер тормозит сильнее всего).
 * **`GET /api/dislocations?limit=50`** — История OBI-импульсов и расхождений.
 * **`GET /api/trades?limit=50`** — История исполнения виртуальных Maker-ордеров.
+* **`GET /api/logs?limit=100&level=INFO`** — **Кольцевой буфер системных логов в оперативной памяти** (фильтры: `level=WARNING/ERROR`, `logger=stream`).
+* **`GET /api/errors?limit=100`** — **Быстрый просмотр только предупреждений и ошибок** (WARNING, ERROR, CRITICAL).
 * **`POST /api/flush`** — Принудительный сброс буферов в MongoDB вне 10-минутного расписания.
 
 ---

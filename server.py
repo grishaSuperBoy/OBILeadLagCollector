@@ -25,6 +25,8 @@ logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+from logger_buffer import log_handler
+logging.getLogger().addHandler(log_handler)
 log = logging.getLogger("server")
 
 # Global component instances
@@ -215,6 +217,24 @@ async def api_flush():
     return JSONResponse(res)
 
 
+@app.get("/api/logs")
+async def api_logs(
+    level: Optional[str] = Query(None, description="Minimum level filter: INFO, WARNING, ERROR"),
+    logger: Optional[str] = Query(None, description="Logger name filter (e.g. stream, engine, mongo)"),
+    limit: int = Query(100, ge=1, le=500),
+):
+    """Returns recent log messages from memory ring-buffer."""
+    entries = log_handler.get_logs(level=level, logger_name=logger, limit=limit)
+    return JSONResponse({"count": len(entries), "logs": entries})
+
+
+@app.get("/api/errors")
+async def api_errors(limit: int = Query(100, ge=1, le=500)):
+    """Convenience endpoint returning only WARNING, ERROR, and CRITICAL logs."""
+    errors = log_handler.get_errors(limit=limit)
+    return JSONResponse({"count": len(errors), "errors": errors})
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     """Ultra-lightweight dark-mode real-time dashboard."""
@@ -360,6 +380,17 @@ async def dashboard():
     <tbody id="scrubbersBody"><tr><td colspan="7" style="color:var(--muted); text-align:center;">Поиск циклических ММ...</td></tr></tbody>
   </table>
 
+  <!-- In-Memory System Logs & Errors Console -->
+  <div class="section-title">
+    <span>📋 Системный лог и ошибки в оперативной памяти (In-Memory Buffer)</span>
+    <span style="font-size:11px; color:var(--muted); font-weight:normal; margin-left:10px;">
+      [Эндпоинты: <a href="/api/logs" target="_blank" style="color:var(--accent);">/api/logs</a> • <a href="/api/errors" target="_blank" style="color:var(--red);">/api/errors</a>]
+    </span>
+  </div>
+  <div style="background:var(--card); border:1px solid var(--border); border-radius:8px; padding:12px; max-height:220px; overflow-y:auto; font-family:monospace; font-size:11px; line-height:1.5; margin-bottom:24px;" id="logsConsole">
+    <div style="color:var(--muted);">Загрузка логов...</div>
+  </div>
+
   <script>
     async function updateData() {
       try {
@@ -479,6 +510,29 @@ async def dashboard():
             </tr>
           `).join('');
         }
+
+        // 7. System Logs Console
+        try {
+          const lRes = await fetch('/api/logs?limit=30');
+          if (lRes.ok) {
+            const lData = await lRes.json();
+            if (lData.logs && lData.logs.length) {
+              const logsBox = document.getElementById('logsConsole');
+              logsBox.innerHTML = lData.logs.map(l => {
+                let color = 'var(--text)';
+                if (l.level === 'WARNING') color = 'var(--yellow)';
+                else if (l.level === 'ERROR' || l.level === 'CRITICAL') color = 'var(--red)';
+                else if (l.level === 'INFO') color = '#9ecbff';
+                return `<div style="border-bottom:1px solid rgba(255,255,255,0.05); padding:2px 0;">
+                  <span style="color:var(--muted);">${new Date(l.created * 1000).toLocaleTimeString()}</span>
+                  <span style="color:${color}; font-weight:bold; margin:0 6px;">[${l.level}]</span>
+                  <span style="color:var(--accent); margin-right:6px;">${l.logger}:</span>
+                  <span>${l.message.replace(/</g, '&lt;')}</span>
+                </div>`;
+              }).join('');
+            }
+          }
+        } catch (e) {}
 
       } catch (err) {
         console.error(err);

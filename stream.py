@@ -143,14 +143,18 @@ class HyperliquidStream(BaseVenueStream):
                     self.connected = True
                     log.info("[hyperliquid] Connected! Subscribing to l2Book...")
 
-                    # Subscribe to each coin
+                    # Subscribe to each coin (filter unsupported meme tickers to prevent WS drop)
+                    unsupported_hl = {"PEPE", "SHIB", "BONK", "FLOKI"}
                     for s in self.symbols:
                         coin = s.replace("USDT", "").replace("USD", "").upper()
+                        if coin in unsupported_hl:
+                            continue
                         sub_msg = {
                             "method": "subscribe",
                             "subscription": {"type": "l2Book", "coin": coin}
                         }
                         await ws.send(json.dumps(sub_msg))
+                        await asyncio.sleep(0.025)
 
                     # Background ping loop
                     ping_task = asyncio.create_task(self._ping_loop(ws))
@@ -171,7 +175,7 @@ class HyperliquidStream(BaseVenueStream):
     async def _ping_loop(self, ws):
         try:
             while self._running:
-                await asyncio.sleep(40)
+                await asyncio.sleep(20)
                 await ws.send(json.dumps({"method": "ping"}))
         except Exception:
             pass
@@ -325,6 +329,15 @@ class CEXFastStream(BaseVenueStream):
                     while self._running:
                         msg = await ws.recv()
                         self.last_msg_ts = time.time()
+                        if isinstance(msg, bytes):
+                            import gzip
+                            try:
+                                msg = gzip.decompress(msg).decode("utf-8")
+                            except Exception:
+                                msg = msg.decode("utf-8", errors="ignore")
+                        if msg == "Ping":
+                            await ws.send("Pong")
+                            continue
                         self._parse_message(msg)
             except asyncio.CancelledError:
                 break
@@ -357,6 +370,16 @@ class CEXFastStream(BaseVenueStream):
                     "payload": args + ["5", "0"]
                 }
                 await ws.send(json.dumps(sub))
+            elif self.name == "bingx":
+                for s in self.symbols:
+                    coin = s.replace("USDT", "").upper()
+                    sub = {
+                        "id": f"sub_{coin}",
+                        "reqType": "sub",
+                        "dataType": f"{coin}-USDT@depth5",
+                    }
+                    await ws.send(json.dumps(sub))
+                    await asyncio.sleep(0.02)
         except Exception as e:
             log.warning(f"[{self.name}] Error sending sub: {e}")
 
@@ -440,6 +463,20 @@ class CEXFastStream(BaseVenueStream):
                     bids = [(float(x.get("p", 0)), float(x.get("s", 0))) for x in raw_b[:5]]
                     asks = [(float(x.get("p", 0)), float(x.get("s", 0))) for x in raw_a[:5]]
                     self.callback(OrderBookDepth5(self.name, sym, time.time(), int(data.get("time_ms", 0)), bids, asks))
+
+            # 6. BingX
+            elif self.name == "bingx":
+                datatype = data.get("dataType", "")
+                if "@depth5" not in datatype:
+                    return
+                sym = datatype.split("@")[0].replace("-", "")
+                b_data = data.get("data", {})
+                raw_b = b_data.get("bids", [])
+                raw_a = b_data.get("asks", [])
+                if raw_b and raw_a:
+                    bids = [(float(p), float(q)) for p, q in raw_b[:5]]
+                    asks = [(float(p), float(q)) for p, q in raw_a[:5]]
+                    self.callback(OrderBookDepth5(self.name, sym, time.time(), int(data.get("ts", 0)), bids, asks))
         except Exception as e:
             pass
 
