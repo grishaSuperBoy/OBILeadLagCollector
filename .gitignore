@@ -4,6 +4,9 @@
 *.env
 QUANT_ALPHA_STRATEGIES.md
 *.alpha.md
+PRACTICAL_LATENCY_ARBITRAGE_GUIDE.alpha.md
+INTERNAL_*.md
+README_INTERNAL*.md
 research_secrets/
 
 # Python
