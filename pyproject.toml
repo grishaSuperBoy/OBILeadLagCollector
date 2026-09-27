@@ -1,0 +1,25 @@
+[tool.poetry]
+name = "obi-lead-lag-collector"
+version = "0.1.0"
+description = "High-Performance OBI Lead-Lag & Weak Market Maker Data Collector for Render Free Tier & MongoDB Atlas"
+authors = ["grishaSuperBoy <333852748+grishaSuperBoy@users.noreply.github.com>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.13"
+fastapi = "^0.110.0"
+uvicorn = "^0.29.0"
+websockets = ">=12.0,<14.0"
+pymongo = {extras = ["srv"], version = "^4.6.0"}
+python-dotenv = "^1.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+
+[tool.poetry.scripts]
+obi-collector = "main:run"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

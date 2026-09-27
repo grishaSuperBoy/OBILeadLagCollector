@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: obi-lead-lag-collector
+    runtime: python
+    buildCommand: "pip install poetry && poetry install --only main"
+    startCommand: "poetry run python main.py"
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: MONGO_DB_URL
+        sync: false # Set securely in Render dashboard
+      - key: ENVIRONMENT
+        value: production
+      - key: FLUSH_INTERVAL_SEC
+        value: "600"
+      - key: MIN_LEAD_LAG_BPS
+        value: "15.0"
+      - key: OBI_THRESHOLD
+        value: "0.50"
