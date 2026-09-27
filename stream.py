@@ -8,10 +8,10 @@ import asyncio
 import json
 import logging
 import time
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set, Any
 import websockets
 
-from models import OrderBookDepth5
+from models import OrderBookDepth5, LiquidationEvent, FundingScheduleEvent
 
 log = logging.getLogger("stream")
 
@@ -440,6 +440,8 @@ class CEXFastStream(BaseVenueStream):
                     bids = [(float(x.get("p", 0)), float(x.get("s", 0))) for x in raw_b[:5]]
                     asks = [(float(x.get("p", 0)), float(x.get("s", 0))) for x in raw_a[:5]]
                     self.callback(OrderBookDepth5(self.name, sym, time.time(), int(data.get("time_ms", 0)), bids, asks))
+        except Exception as e:
+            pass
 
 # =====================================================================
 # ДОПОЛНИТЕЛЬНЫЕ АЛЬФА-ПОТОКИ: ЛИКВИДАЦИИ, ФАНДИНГ, СДЕЛКИ (CVD)

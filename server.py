@@ -3,6 +3,9 @@ Lightweight FastAPI Server for Render.com Free Tier.
 Binds to $PORT (0.0.0.0), serves real-time dark dashboard, and passes /health checks.
 """
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 from contextlib import asynccontextmanager
 import logging
 import os
