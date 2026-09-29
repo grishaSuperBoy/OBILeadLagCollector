@@ -21,6 +21,7 @@ from models import (
     TimeAnomalyMetric,
     ScrubberCycleMetric,
     TradFiArbitrageMetric,
+    V2DMetric,
 )
 import config
 
@@ -87,6 +88,9 @@ class OBIEngine:
         self._unflushed_dislocations: List[Dict[str, Any]] = []
         self._unflushed_trades: List[Dict[str, Any]] = []
 
+        self._unflushed_v2d_stats: List[Dict[str, Any]] = []
+        self._v2d_state: Dict[str, dict] = {}
+
 
         # 10-minute rolling liquidity statistics per (exchange, symbol)
         self._liquidity_accumulators: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -127,8 +131,9 @@ class OBIEngine:
         # 3. Evaluate Liquidity Void (для ловли прострелов / 'Тазики' Long & Short)
         self._evaluate_liquidity_void(snap, key, now)
 
-        # 4. Check for Lead-Lag Dislocation if update is from Lead (Binance)
+        # 4. Check for V2D Snapshot (10s rolling)
         if ex == self.lead_exchange:
+            self._update_v2d(snap, now)
             self._evaluate_lead_update(snap, now)
         elif ex in self.lag_exchanges:
             # 5. If update is from Lag venue, update active paper trades (fill / TP / SL)
@@ -220,8 +225,8 @@ class OBIEngine:
             if not lag_snap or not lag_snap.bids or not lag_snap.asks:
                 continue
 
-            # Stale check: lag book must not be older than 2.5s
-            if abs(now - lag_snap.ts) > 2.5:
+            # Stale check: lag book must not be older than 10.0s (accommodating resting DEX quotes)
+            if abs(now - lag_snap.ts) > 10.0:
                 continue
 
             lag_mid = lag_snap.mid_price
@@ -382,6 +387,16 @@ class OBIEngine:
     # ОБРАБОТЧИКИ НОВЫХ АЛЬФА-ПОТОКОВ (ЛИКВИДАЦИИ, ФАНДИНГ, CVD)
     # =====================================================================
 
+    def _init_v2d(self, sym: str):
+        if sym not in self._v2d_state:
+            self._v2d_state[sym] = {
+                "liq_vol": 0.0,
+                "vol_buy": 0.0,
+                "vol_sell": 0.0,
+                "last_obi": 0.0,
+                "flush_ts": time.time()
+            }
+
     def on_liquidation(self, event: LiquidationEvent):
         """
         Обработка ликвидаций с Binance Futures.
@@ -391,8 +406,11 @@ class OBIEngine:
         self._recent_liquidations.append(event)
         self._unflushed_liquidations.append(event.to_dict())
 
-        # Если ликвидация на отслеживаемом альте и сумма >= $10,000
         sym_clean = event.symbol.replace("USDT", "")
+        self._init_v2d(sym_clean)
+        self._v2d_state[sym_clean]["liq_vol"] += float(event.qty_usd)
+
+        # Если ликвидация на отслеживаемом альте и сумма >= $10,000
         if (event.symbol in self.symbols or sym_clean in self.symbols) and event.qty_usd >= 10000.0:
             log.warning(
                 f"🚨 [LIQUIDATION CASCADE] {event.side} on {event.symbol} (${event.qty_usd:,.0f} @ {event.price})! "
@@ -422,6 +440,13 @@ class OBIEngine:
         """
         now = ts if ts > 0 else time.time()
         notional = price * qty
+
+        sym_clean = symbol.replace("USDT", "")
+        self._init_v2d(sym_clean)
+        if is_buyer_maker:
+            self._v2d_state[sym_clean]["vol_sell"] += notional
+        else:
+            self._v2d_state[sym_clean]["vol_buy"] += notional
 
         if symbol not in self._cvd_windows:
             self._cvd_windows[symbol] = {
@@ -559,6 +584,7 @@ class OBIEngine:
         List[Dict[str, Any]],
         List[Dict[str, Any]],
         List[Dict[str, Any]],
+        List[Dict[str, Any]],
     ]:
         """Extracts unpersisted data for MongoDB batch sync and resets unflushed queues."""
         now = time.time()
@@ -570,12 +596,44 @@ class OBIEngine:
         trades = self._unflushed_trades
         self._unflushed_trades = []
 
-        # 2. Pop liquidations & funding anomalies
+        # 2. Pop liquidations, funding anomalies & generate v2d stats
         liquidations = self._unflushed_liquidations
         self._unflushed_liquidations = []
 
         funding_anomalies = self._unflushed_funding
         self._unflushed_funding = []
+        
+        v2d_stats = []
+        for sym, st in list(self._v2d_state.items()):
+            liq_vol = st.get("liq_vol", 0.0)
+            vol_buy = st.get("vol_buy", 0.0)
+            vol_sell = st.get("vol_sell", 0.0)
+            vol_delta = vol_buy - vol_sell
+            
+            full_sym = f"{sym}USDT" if not sym.endswith("USDT") else sym
+            lead_snap = self._latest_books.get(("binance", full_sym))
+            bid_depth_2pct = lead_snap.depth_bid_usd if lead_snap and lead_snap.depth_bid_usd > 0 else 10000.0
+            v2d_score = round(liq_vol / bid_depth_2pct, 4)
+            curr_obi = lead_snap.obi if lead_snap else 0.0
+            obi_velocity = round(curr_obi - st.get("last_obi", 0.0), 3)
+
+            if liq_vol > 0 or abs(vol_delta) > 0 or abs(obi_velocity) > 0.01:
+                v2d_stats.append({
+                    "ts": now,
+                    "symbol": full_sym,
+                    "liq_vol_10s_usd": round(liq_vol, 2),
+                    "bid_depth_2pct_usd": round(bid_depth_2pct, 2),
+                    "v2d_score": v2d_score,
+                    "volume_delta_10s_usd": round(vol_delta, 2),
+                    "obi_velocity_10s": obi_velocity,
+                })
+            st["liq_vol"] = 0.0
+            st["vol_buy"] = 0.0
+            st["vol_sell"] = 0.0
+            st["last_obi"] = curr_obi
+            st["flush_ts"] = now
+
+        self._unflushed_v2d_stats = []
 
         # 3. Extract and reset 10m liquidity snapshots
         liquidity_snapshots = []
@@ -597,7 +655,7 @@ class OBIEngine:
         # Reset accumulators for the next 10-minute window
         self._liquidity_accumulators = {}
 
-        return dislocations, liquidity_snapshots, trades, liquidations, funding_anomalies
+        return dislocations, liquidity_snapshots, trades, liquidations, funding_anomalies, v2d_stats
 
     def get_snapshot(self) -> Dict[str, Any]:
         """Returns JSON snapshot of live engine state for API & Dashboard."""

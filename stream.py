@@ -63,25 +63,23 @@ class BinanceStyleStream(BaseVenueStream):
         self.base_ws_url = base_ws_url.rstrip("/")
 
     async def _run_loop(self):
-        # Format combined stream url
-        # E.g. wss://fstream.binance.com/stream?streams=enausdt@depth5@100ms/wldusdt@depth5@100ms/...
         formatted_syms = [s.lower() if s.endswith("usdt") else f"{s.lower()}usdt" for s in self.symbols]
-        streams_param = "/".join(f"{s}@depth5@100ms" for s in formatted_syms)
-        url = f"{self.base_ws_url}/stream?streams={streams_param}"
+        sub_streams = [f"{s}@depth5@100ms" for s in formatted_syms]
+        url = f"{self.base_ws_url}/stream?streams=" + "/".join(sub_streams)
 
         while self._running:
             try:
-                log.info(f"[{self.name}] Connecting to {self.base_ws_url} ({len(self.symbols)} symbols)...")
+                log.info(f"[{self.name}] Connecting to {self.base_ws_url}/stream ({len(self.symbols)} symbols)...")
                 async with websockets.connect(
                     url,
-                    ping_interval=20,
-                    ping_timeout=10,
-                    max_queue=200,
+                    ping_interval=None,
+                    ping_timeout=None,
+                    max_queue=2000,
                 ) as ws:
                     self.connected = True
-                    log.info(f"[{self.name}] Connected successfully!")
+                    log.info(f"[{self.name}] Connected! Streaming depth5...")
                     while self._running:
-                        msg = await ws.recv()
+                        msg = await asyncio.wait_for(ws.recv(), timeout=20.0)
                         self.last_msg_ts = time.time()
                         self._parse_message(msg)
             except asyncio.CancelledError:
@@ -129,6 +127,21 @@ class HyperliquidStream(BaseVenueStream):
 
     def __init__(self, symbols: List[str], callback: Callable[[OrderBookDepth5], None]):
         super().__init__("hyperliquid", symbols, callback)
+        import urllib.request
+        import json
+        self.valid_hl_coins = None
+        try:
+            req = urllib.request.Request(
+                'https://api.hyperliquid.xyz/info', 
+                data=json.dumps({'type': 'meta'}).encode('utf-8'),
+                headers={'Content-Type': 'application/json'}
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                resp = json.loads(response.read().decode('utf-8'))
+                self.valid_hl_coins = {a['name'] for a in resp['universe']}
+                log.info(f"[hyperliquid] Fetched {len(self.valid_hl_coins)} valid coins from REST API.")
+        except Exception as e:
+            log.warning(f"[hyperliquid] Failed to fetch universe: {e}")
 
     async def _run_loop(self):
         while self._running:
@@ -136,19 +149,25 @@ class HyperliquidStream(BaseVenueStream):
                 log.info(f"[hyperliquid] Connecting to {self.WS_URL}...")
                 async with websockets.connect(
                     self.WS_URL,
-                    ping_interval=30,
-                    ping_timeout=15,
-                    max_queue=200,
+                    ping_interval=None,
+                    ping_timeout=None,
+                    max_queue=500,
                 ) as ws:
                     self.connected = True
                     log.info("[hyperliquid] Connected! Subscribing to l2Book...")
 
                     # Subscribe to each coin (filter unsupported meme tickers to prevent WS drop)
-                    unsupported_hl = {"PEPE", "SHIB", "BONK", "FLOKI"}
                     for s in self.symbols:
                         coin = s.replace("USDT", "").replace("USD", "").upper()
-                        if coin in unsupported_hl:
+                        
+                        if coin.startswith("1000"):
+                            hl_coin = "k" + coin[4:]
+                            if self.valid_hl_coins and hl_coin in self.valid_hl_coins:
+                                coin = hl_coin
+                                
+                        if self.valid_hl_coins and coin not in self.valid_hl_coins:
                             continue
+                            
                         sub_msg = {
                             "method": "subscribe",
                             "subscription": {"type": "l2Book", "coin": coin}
@@ -226,9 +245,9 @@ class DydxStream(BaseVenueStream):
                 log.info(f"[dydx] Connecting to {self.WS_URL}...")
                 async with websockets.connect(
                     self.WS_URL,
-                    ping_interval=25,
-                    ping_timeout=15,
-                    max_queue=200,
+                    ping_interval=None,
+                    ping_timeout=None,
+                    max_queue=500,
                 ) as ws:
                     self.connected = True
                     log.info("[dydx] Connected! Subscribing to v4_orderbook...")
@@ -313,32 +332,48 @@ class CEXFastStream(BaseVenueStream):
             log.warning(f"[{self.name}] No native WS endpoint configured.")
             return
 
+    async def _ping_loop(self, ws):
+        try:
+            while self._running:
+                await asyncio.sleep(20)
+                if self.name == "bybit":
+                    await ws.send(json.dumps({"op": "ping"}))
+                elif self.name == "gateio":
+                    await ws.send(json.dumps({"time": int(time.time()), "channel": "futures.ping"}))
+        except Exception:
+            pass
+
+    async def _run_loop(self):
         while self._running:
             try:
                 log.info(f"[{self.name}] Connecting to {self.ws_url}...")
                 async with websockets.connect(
                     self.ws_url,
-                    ping_interval=20,
-                    ping_timeout=10,
-                    max_queue=200,
+                    ping_interval=None,
+                    ping_timeout=None,
+                    max_queue=2000,
                 ) as ws:
                     self.connected = True
                     log.info(f"[{self.name}] Connected! Sending subscriptions...")
                     await self._send_subscriptions(ws)
-
-                    while self._running:
-                        msg = await ws.recv()
-                        self.last_msg_ts = time.time()
-                        if isinstance(msg, bytes):
-                            import gzip
-                            try:
-                                msg = gzip.decompress(msg).decode("utf-8")
-                            except Exception:
-                                msg = msg.decode("utf-8", errors="ignore")
-                        if msg == "Ping":
-                            await ws.send("Pong")
-                            continue
-                        self._parse_message(msg)
+                    ping_task = asyncio.create_task(self._ping_loop(ws))
+                    try:
+                        while self._running:
+                            # 60s silence watchdog (triggers clean reconnect if exchange stops pushing)
+                            msg = await asyncio.wait_for(ws.recv(), timeout=60.0)
+                            self.last_msg_ts = time.time()
+                            if isinstance(msg, bytes):
+                                import gzip
+                                try:
+                                    msg = gzip.decompress(msg).decode("utf-8")
+                                except Exception:
+                                    msg = msg.decode("utf-8", errors="ignore")
+                            if msg == "Ping":
+                                await ws.send("Pong")
+                                continue
+                            self._parse_message(msg)
+                    finally:
+                        ping_task.cancel()
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -349,27 +384,36 @@ class CEXFastStream(BaseVenueStream):
     async def _send_subscriptions(self, ws):
         try:
             if self.name == "bybit":
-                args = [f"orderbook.50.{s.upper()}" for s in self.symbols]
-                await ws.send(json.dumps({"op": "subscribe", "args": args}))
+                for i in range(0, len(self.symbols), 30):
+                    args = [f"orderbook.50.{s.upper()}" for s in self.symbols[i:i+30]]
+                    await ws.send(json.dumps({"op": "subscribe", "args": args}))
+                    await asyncio.sleep(0.04)
             elif self.name == "okx":
-                args = [{"channel": "books5", "instId": f"{s.replace('USDT','')}-USDT-SWAP"} for s in self.symbols]
-                await ws.send(json.dumps({"op": "subscribe", "args": args}))
+                for i in range(0, len(self.symbols), 50):
+                    args = [{"channel": "books5", "instId": f"{s.replace('USDT','')}-USDT-SWAP"} for s in self.symbols[i:i+50]]
+                    await ws.send(json.dumps({"op": "subscribe", "args": args}))
+                    await asyncio.sleep(0.04)
             elif self.name == "bitget":
-                args = [{"instType": "USDT-FUTURES", "channel": "books5", "instId": s.upper()} for s in self.symbols]
-                await ws.send(json.dumps({"op": "subscribe", "args": args}))
+                for i in range(0, len(self.symbols), 50):
+                    args = [{"instType": "USDT-FUTURES", "channel": "books5", "instId": s.upper()} for s in self.symbols[i:i+50]]
+                    await ws.send(json.dumps({"op": "subscribe", "args": args}))
+                    await asyncio.sleep(0.04)
             elif self.name == "mexc":
                 for s in self.symbols:
                     pair = f"{s.replace('USDT','')}_USDT"
                     await ws.send(json.dumps({"method": "sub.depth.full", "param": {"symbol": pair, "limit": 5}}))
+                    await asyncio.sleep(0.01)
             elif self.name == "gateio":
-                args = [f"{s.replace('USDT','')}_USDT" for s in self.symbols]
-                sub = {
-                    "time": int(time.time()),
-                    "channel": "futures.order_book",
-                    "event": "subscribe",
-                    "payload": args + ["5", "0"]
-                }
-                await ws.send(json.dumps(sub))
+                for s in self.symbols:
+                    pair = f"{s.replace('USDT','')}_USDT"
+                    sub = {
+                        "time": int(time.time()),
+                        "channel": "futures.order_book",
+                        "event": "subscribe",
+                        "payload": [pair, "5", "0"]
+                    }
+                    await ws.send(json.dumps(sub))
+                    await asyncio.sleep(0.01)
             elif self.name == "bingx":
                 for s in self.symbols:
                     coin = s.replace("USDT", "").upper()
@@ -489,7 +533,7 @@ class BinanceLiquidationStream:
     Глобальный сокет принудительных ликвидаций Binance Futures (!forceOrder@arr).
     Всего 1 легковесный сокет на весь рынок, потребляет < 0.1% CPU.
     """
-    WS_URL = "wss://fstream.binance.com/ws/!forceOrder@arr"
+    WS_URL = "wss://fstream.binance.com/market/ws"
 
     def __init__(self, callback: Callable[[LiquidationEvent], None]):
         self.callback = callback
@@ -511,10 +555,12 @@ class BinanceLiquidationStream:
     async def _run_loop(self):
         while self._running:
             try:
-                log.info("[binance_liquidations] Connecting to !forceOrder@arr...")
-                async with websockets.connect(self.WS_URL, ping_interval=20, ping_timeout=10, max_queue=200) as ws:
+                log.info("[binance_liquidations] Connecting to market/ws (!forceOrder@arr)...")
+                async with websockets.connect(self.WS_URL, ping_interval=20, ping_timeout=15, max_queue=500) as ws:
+                    sub = {"method": "SUBSCRIBE", "params": ["!forceOrder@arr"], "id": 1001}
+                    await ws.send(json.dumps(sub))
                     self.connected = True
-                    log.info("[binance_liquidations] Stream connected successfully!")
+                    log.info("[binance_liquidations] Stream connected & subscribed successfully!")
                     while self._running:
                         raw = await ws.recv()
                         self.last_msg_ts = time.time()
@@ -559,7 +605,7 @@ class BinanceMarkPriceFundingStream:
     Поток ставок фандинга и обратного отсчета (!markPrice@arr@1s).
     Единый поток для всех пар Binance, обновляется раз в секунду.
     """
-    WS_URL = "wss://fstream.binance.com/ws/!markPrice@arr@1s"
+    WS_URL = "wss://fstream.binance.com/market/ws"
 
     def __init__(self, callback: Callable[[FundingScheduleEvent], None], symbols: List[str]):
         self.callback = callback
@@ -582,10 +628,12 @@ class BinanceMarkPriceFundingStream:
     async def _run_loop(self):
         while self._running:
             try:
-                log.info("[binance_funding] Connecting to !markPrice@arr@1s...")
-                async with websockets.connect(self.WS_URL, ping_interval=20, ping_timeout=10, max_queue=200) as ws:
+                log.info("[binance_funding] Connecting to market/ws (!markPrice@arr@1s)...")
+                async with websockets.connect(self.WS_URL, ping_interval=20, ping_timeout=15, max_queue=500) as ws:
+                    sub = {"method": "SUBSCRIBE", "params": ["!markPrice@arr@1s"], "id": 1002}
+                    await ws.send(json.dumps(sub))
                     self.connected = True
-                    log.info("[binance_funding] Stream connected successfully!")
+                    log.info("[binance_funding] Stream connected & subscribed successfully!")
                     while self._running:
                         raw = await ws.recv()
                         self.last_msg_ts = time.time()
@@ -599,11 +647,16 @@ class BinanceMarkPriceFundingStream:
 
     def _parse_msg(self, raw: str):
         try:
-            items = json.loads(raw)
-            now = time.time()
-            if not isinstance(items, list):
-                items = [items]
+            payload = json.loads(raw)
+            if not isinstance(payload, list):
+                if "data" in payload and isinstance(payload["data"], list):
+                    items = payload["data"]
+                else:
+                    return
+            else:
+                items = payload
 
+            now = time.time()
             for item in items:
                 sym = item.get("s", "").upper()
                 if self.tracked_symbols and sym not in self.tracked_symbols:
@@ -658,15 +711,21 @@ class BinanceAggTradeStream:
         self.connected = False
 
     async def _run_loop(self):
-        streams_param = "/".join(f"{s}@aggTrade" for s in self.symbols)
-        url = f"wss://fstream.binance.com/stream?streams={streams_param}"
+        url = "wss://fstream.binance.com/market/ws"
+        formatted_syms = [s.lower() if s.endswith("usdt") else f"{s.lower()}usdt" for s in self.symbols]
+        sub_streams = [f"{s}@aggTrade" for s in formatted_syms]
 
         while self._running:
             try:
-                log.info(f"[binance_aggtrades] Connecting ({len(self.symbols)} alts)...")
-                async with websockets.connect(url, ping_interval=20, ping_timeout=10, max_queue=300) as ws:
+                log.info(f"[binance_aggtrades] Connecting to market/ws ({len(self.symbols)} alts)...")
+                async with websockets.connect(url, ping_interval=20, ping_timeout=20, max_queue=2000) as ws:
                     self.connected = True
-                    log.info("[binance_aggtrades] Connected successfully!")
+                    log.info("[binance_aggtrades] Connected! Sending subscriptions...")
+                    import json
+                    for i in range(0, len(sub_streams), 50):
+                        chunk = sub_streams[i:i+50]
+                        await ws.send(json.dumps({"method": "SUBSCRIBE", "params": chunk, "id": i+100}))
+                        await asyncio.sleep(0.04)
                     while self._running:
                         raw = await ws.recv()
                         self.last_msg_ts = time.time()
@@ -729,34 +788,38 @@ class StreamManager:
     async def start_all(self):
         log.info(f"Starting StreamManager for {len(self.symbols)} symbols across {1 + len(self.lag_exchanges)} venues...")
 
-        # 1. Lead Venue Orderbook (Binance)
+        # 1. Lead Venue Orderbook (Binance) - Sharded across 50-coin chunks to avoid WS frame overload
         if self.lead_exchange == "binance":
-            self.streams["binance"] = BinanceStyleStream(
-                name="binance",
-                base_ws_url="wss://fstream.binance.com",
-                symbols=self.symbols,
-                callback=self.callback,
-            )
+            for i in range(0, len(self.symbols), 50):
+                self.streams[f"binance_{i}"] = BinanceStyleStream(
+                    name="binance",
+                    base_ws_url="wss://fstream.binance.com",
+                    symbols=self.symbols[i:i+50],
+                    callback=self.callback,
+                )
 
         # 2. Lag Venues Orderbooks
         for ex in self.lag_exchanges:
             if ex == "asterdex":
-                self.streams["asterdex"] = BinanceStyleStream(
-                    name="asterdex",
-                    base_ws_url="wss://fstream.asterdex.com",
-                    symbols=self.symbols,
-                    callback=self.callback,
-                )
+                for i in range(0, len(self.symbols), 50):
+                    self.streams[f"asterdex_{i}"] = BinanceStyleStream(
+                        name="asterdex",
+                        base_ws_url="wss://fstream.asterdex.com",
+                        symbols=self.symbols[i:i+50],
+                        callback=self.callback,
+                    )
             elif ex == "hyperliquid":
-                self.streams["hyperliquid"] = HyperliquidStream(
-                    symbols=self.symbols,
-                    callback=self.callback,
-                )
+                for i in range(0, len(self.symbols), 50):
+                    self.streams[f"hyperliquid_{i}"] = HyperliquidStream(
+                        symbols=self.symbols[i:i+50],
+                        callback=self.callback,
+                    )
             elif ex == "dydx":
-                self.streams["dydx"] = DydxStream(
-                    symbols=self.symbols,
-                    callback=self.callback,
-                )
+                for i in range(0, len(self.symbols), 50):
+                    self.streams[f"dydx_{i}"] = DydxStream(
+                        symbols=self.symbols[i:i+50],
+                        callback=self.callback,
+                    )
             elif ex in CEXFastStream.URL_MAP:
                 self.streams[ex] = CEXFastStream(
                     exchange=ex,

@@ -208,6 +208,29 @@ async def api_scrubbers():
     return JSONResponse(snap.get("active_scrubbers", []))
 
 
+@app.get("/api/books_summary")
+async def api_books_summary():
+    """Returns counts of active in-memory books per exchange and sample symbols."""
+    if not engine:
+        return JSONResponse({})
+    summary = {}
+    for (ex, sym), book in engine._latest_books.items():
+        if ex not in summary:
+            summary[ex] = {"count": 0, "symbols": []}
+        summary[ex]["count"] += 1
+        summary[ex]["symbols"].append(sym)
+
+    bin_syms = set(summary.get("binance", {}).get("symbols", []))
+    intersections = {}
+    for ex, info in summary.items():
+        if ex != "binance":
+            intersections[ex] = len(bin_syms & set(info.get("symbols", [])))
+            info["symbols"] = info["symbols"][:10]
+    if "binance" in summary:
+        summary["binance"]["symbols"] = summary["binance"]["symbols"][:10]
+    return JSONResponse({"summary": summary, "intersections_with_binance": intersections})
+
+
 @app.post("/api/flush")
 async def api_flush():
     """Manually triggers an immediate MongoDB Atlas batch flush."""

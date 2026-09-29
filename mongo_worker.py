@@ -12,6 +12,7 @@ from pymongo.errors import PyMongoError
 
 import config
 from engine import OBIEngine
+from local_storage import LocalStorageManager
 
 log = logging.getLogger("mongo_worker")
 
@@ -22,6 +23,7 @@ class MongoBatchWorker:
         self.mongo_url = mongo_url or config.MONGO_DB_URL
         self.flush_interval_sec = flush_interval_sec
         self.db_name = config.MONGO_DB_NAME
+        self.local_storage = LocalStorageManager()
 
         self._client: Optional[MongoClient] = None
         self._running = False
@@ -91,15 +93,30 @@ class MongoBatchWorker:
     async def flush_now(self) -> Dict[str, Any]:
         """Performs immediate batch flush of all unflushed engine buffers."""
         t0 = time.time()
-        dislocations, liquidity, trades, liquidations, funding_anomalies = self.engine.extract_and_reset_unflushed()
-        total_items = len(dislocations) + len(liquidity) + len(trades) + len(liquidations) + len(funding_anomalies)
+        dislocations, liquidity, trades, liquidations, funding_anomalies, v2d_stats = self.engine.extract_and_reset_unflushed()
+        total_items = len(dislocations) + len(liquidity) + len(trades) + len(liquidations) + len(funding_anomalies) + len(v2d_stats)
 
         if total_items == 0:
             return {"status": "skipped", "count": 0, "message": "No new data to flush"}
 
+        # 1. Сначала сохраняем на локальный диск (гарантия нулевой потери данных)
+        local_counts = self.local_storage.save_batch(
+            dislocations=dislocations,
+            liquidity=liquidity,
+            trades=trades,
+            liquidations=liquidations,
+            funding_anomalies=funding_anomalies,
+            v2d_stats=v2d_stats
+        )
+
+        # 2. Затем отправляем в облако MongoDB Atlas
         if not self._client:
             if not self.connect():
-                return {"status": "error", "error": "MongoDB not connected", "unsynced_items": total_items}
+                return {
+                    "status": "partial_local_only",
+                    "error": "MongoDB not connected, saved locally",
+                    "local_saved": local_counts
+                }
 
         db = self._client[self.db_name]
 
@@ -123,6 +140,9 @@ class MongoBatchWorker:
                 if funding_anomalies:
                     db["funding_anomalies"].insert_many(funding_anomalies)
                     res["funding_anomalies"] = len(funding_anomalies)
+                if v2d_stats:
+                    db["v2d_stats_10s"].insert_many(v2d_stats)
+                    res["v2d_stats"] = len(v2d_stats)
 
                 # Update collector heartbeat
                 db["collector_heartbeats"].update_one(
@@ -134,6 +154,7 @@ class MongoBatchWorker:
                             "dislocations_count": self.total_flushed_dislocations + len(dislocations),
                             "trades_count": self.total_flushed_trades + len(trades),
                             "liquidations_count": len(liquidations),
+                            "v2d_stats_count": len(v2d_stats),
                         }
                     },
                     upsert=True

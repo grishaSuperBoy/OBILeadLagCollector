@@ -15,7 +15,7 @@ MONGO_DB_URL: str = os.getenv(
     ""
 )
 MONGO_DB_NAME: str = os.getenv("MONGO_DB_NAME", "obi_lead_lag")
-FLUSH_INTERVAL_SEC: int = int(os.getenv("FLUSH_INTERVAL_SEC", "600"))  # 10 minutes
+FLUSH_INTERVAL_SEC: int = int(os.getenv("FLUSH_INTERVAL_SEC", "60"))  # 1 minute flush to local SQLite & Mongo
 
 # Web Service Port (Render sets this dynamically)
 PORT: int = int(os.getenv("PORT", "8080"))
@@ -44,10 +44,32 @@ SL_BPS: float = float(os.getenv("SL_BPS", "18.0"))                      # -0.18%
 
 # Target Universe of Volatile Altcoins with Cross-Listing & Weak MMs
 DEFAULT_ALTS: List[str] = [
-    "ENA", "WLD", "SUI", "NEAR", "AAVE", "INJ", "APT", "ARB", "OP",
-    "TIA", "SEI", "FET", "RENDER", "LDO", "FIL", "TRUMP", "ICP", "ZRO",
-    "PEPE", "SHIB", "BONK", "FLOKI", "CRV", "STX", "FTM", "RUNE", "TAO",
-    "DOT", "XAI", "ETC", "AVAX", "LINK", "PUMP", "GALA", "KAS", "NOT"
+    "0G", "1000BONK", "1INCH", "2Z", "A", "AAVE", "ACE", "ACH", "ACT", "ADA",
+    "AERO", "AGLD", "AKE", "AKT", "ALCH", "ALGO", "ALICE", "ALLO", "ANTHROPIC", "APE",
+    "APR", "APT", "AR", "ARB", "ARK", "ARKM", "ARX", "ASTER", "ATH", "ATOM",
+    "AUCTION", "AVA", "AVAX", "AVNT", "AXS", "B2", "BANK", "BB", "BCH", "BEAT",
+    "BERA", "BICO", "BILL", "BIO", "BLESS", "BNB", "BOME", "BR", "BROCCOLI", "BSB",
+    "BSV", "BTW", "CAKE", "CAP", "CASHCAT", "CC", "CFG", "CFX", "CHIP", "CHR",
+    "CHZ", "CNPY", "COAI", "COMP", "CORE", "COTI", "CP", "CRO", "CROSS", "CRV",
+    "CVC", "CYS", "DASH", "DATA", "DEEP", "DGAI", "DOGE", "DOT", "DRAM", "DYDX",
+    "DYM", "EDGE", "EGLD", "EIGEN", "ENA", "ENS", "ENSO", "ETC", "ETHFI", "EVAA",
+    "EWY", "F", "FARTCOIN", "FET", "FF", "FIL", "FLOCK", "FLOKI", "FLOW", "FOLKS",
+    "FORM", "G", "GALA", "GAS", "GIGGLE", "GMT", "GMX", "GRAM", "GRASS", "GRT",
+    "GRVT", "H", "HBAR", "HUMA", "ICP", "ID", "IMX", "INJ", "INTW", "IO",
+    "IOST", "IOTA", "JASMY", "JST", "JTO", "JUP", "KAITO", "KAS", "KERNEL", "KITE",
+    "KMNO", "KORU", "KSM", "LAB", "LDO", "LINEA", "LIT", "LPT", "LSK", "LUNA",
+    "LUNC", "MAGIC", "MANA", "MANTRA", "MARSCOIN", "ME", "MELANIA", "MERL", "MET", "METIS",
+    "MINA", "MOODENG", "MORPHO", "MOVR", "MSTU", "MUBARAK", "MUU", "MVLL", "MYX", "NEO",
+    "NIGHT", "NIL", "NMR", "OKB", "ON", "ONE", "ONG", "OP", "OPENAI", "ORCA",
+    "ORDI", "PAXG", "PENDLE", "PENGU", "PHA", "PI", "PIEVERSE", "PIPPIN", "PIXEL", "PLUME",
+    "POL", "POLYX", "PONS", "PROM", "PROVE", "PUMP", "PYTH", "QNT", "RAVE", "RAY",
+    "RE", "RENDER", "REZ", "RIVER", "ROSE", "RUNE", "S", "SAND", "SEI", "SENT",
+    "SHIB", "SIREN", "SKR", "SKY", "SKYAI", "SNX", "SNXX", "SOXS", "SPK", "SPX",
+    "SPY", "SQQQ", "SSV", "STEEM", "STONK", "STRK", "STX", "SUSHI", "SYN", "SYRUP",
+    "TIA", "TQQQ", "TRB", "TRIA", "TRUMP", "TRX", "TUT", "UAI", "UB", "UMA",
+    "UNI", "US", "USELESS", "VANA", "VELVET", "VET", "VIRTUAL", "VTHO", "VVV", "W",
+    "WAXP", "WIF", "WLD", "WLFI", "XAI", "XAUT", "XLM", "XMR", "XPD", "XPL",
+    "XPT", "XTZ", "YFI", "YGG", "ZAMA", "ZBT", "ZEN", "ZETA", "ZK", "ZRO"
 ]
 
 RAW_SYMBOLS_ENV = os.getenv("SYMBOLS", "")

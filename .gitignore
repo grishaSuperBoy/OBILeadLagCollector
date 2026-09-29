@@ -34,9 +34,11 @@ wheels/
 .installed.cfg
 *.egg
 
-# Logs
+# Logs and Data
 *.log
 logs/
+data/
+*.db
 
 # Testing
 .pytest_cache/
@@ -50,3 +52,14 @@ htmlcov/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Scratch / One-off scripts
+patch*.py
+test_*_ws.py
+test_*_sleep.py
+test_ws.py
+test_invalid_ws.py
+test_binance_aux.py
+db_test.json
+query_db.py
+

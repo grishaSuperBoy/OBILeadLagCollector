@@ -7,6 +7,23 @@ from dataclasses import dataclass, field
 import time
 from typing import Dict, List, Optional, Tuple, Any
 
+@dataclass(slots=True)
+class AggTrade:
+    exchange: str
+    symbol: str
+    ts: float
+    price: float
+    qty: float
+    is_buyer_maker: bool
+
+@dataclass(slots=True)
+class ForceOrder:
+    exchange: str
+    symbol: str
+    ts: float
+    side: str
+    price: float
+    qty: float
 
 @dataclass(slots=True)
 class OrderBookDepth5:
@@ -390,3 +407,23 @@ class TradFiArbitrageMetric:
 
 
 
+@dataclass(slots=True)
+class V2DMetric:
+    ts: float
+    symbol: str
+    liq_vol_10s_usd: float
+    bid_depth_2pct_usd: float
+    v2d_score: float
+    volume_delta_10s_usd: float
+    obi_velocity_10s: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "ts": self.ts,
+            "symbol": self.symbol,
+            "liq_vol_10s_usd": round(self.liq_vol_10s_usd, 2),
+            "bid_depth_2pct_usd": round(self.bid_depth_2pct_usd, 2),
+            "v2d_score": round(self.v2d_score, 4),
+            "volume_delta_10s_usd": round(self.volume_delta_10s_usd, 2),
+            "obi_velocity_10s": round(self.obi_velocity_10s, 4),
+        }
